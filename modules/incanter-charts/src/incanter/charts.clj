@@ -229,8 +229,10 @@
 
   Arguments:
     chart -- an Incanter/JFreeChart object
-    theme -- either a keyword indicating one of the built-in themes, or a JFreeChart ChartTheme object.
-
+    theme -- either a keyword indicating one of the built-in themes,
+             or a JFreeChart ChartTheme object, or a function that
+             applies thematic changes to the JFreeChart.
+  
   Built-in Themes:
     :default
     :dark
@@ -289,6 +291,8 @@
                        set-theme-bw
                      (instance? ChartTheme theme)
                        #(.apply theme %)
+                     (fn? theme)
+                       theme
                      :default
                        set-theme-default))
            ;; bar-painter
@@ -2896,21 +2900,149 @@
        (apply parametric-plot* args#))))
 
 
+;;problem with heat-map is that we miss the gridlines.
+;;strategy is to overlay them on top of the jfreechart xyplot by
+;;using a proxy for xyplot that overrides its final rendering pass
+;;drawAnnotations.  drawAnnotations will invoke drawDomainGridLines
+;;etc. prior to invoking super's drawAnnotations.
+(defn ^XYPlot ->grided-xy-plot
+  "Creates an xyplot that ensures gridlines are drawn over he plot
+   content.  Better way is to define render order via layers,
+   but we'll work within JFree's constraints and avoid
+   redefining the entire draw method."
+  [dataset xaxis yaxis renderer]
+  (let [axis-state   (atom nil)
+        parent-state (atom nil)]
+    (proxy [XYPlot] [dataset xaxis yaxis renderer]
+      ;;on draw, we save info we may need later
+      (draw [g2  area anchor  parentState info]
+        (do (reset! parent-state parentState)
+            (proxy-super draw g2 area anchor parentState info)))
+      ;;save intermediate axis-state results
+      (drawAxes [g2 plot-area data-area plot-state]
+        (let [state-map (proxy-super drawAxes g2 plot-area data-area plot-state)
+              _         (reset! axis-state state-map)]
+          state-map))
+      ;;for the final pass, to overlay gridlines onto the
+      ;;heat-map, prior to annotations, we render the gridlines
+      ;;using stored information (they've already been rendered,
+      ;;but can't be seen).
+      (drawAnnotations [g2 data-area info]
+        (let [state       @axis-state
+              parent      @parent-state
+              domain-axis (.getDomainAxis this)
+              range-axis  (.getRangeAxis  this)
+              domainAxisState (or (get state domain-axis)
+                                  (get parent domain-axis))
+              rangeAxisState (or (get state range-axis)
+                                 (get parent range-axis))
+              ]
+          (do (proxy-super drawDomainGridlines g2 data-area (.getTicks domainAxisState))
+              (proxy-super drawRangeGridlines g2 data-area  (.getTicks rangeAxisState))
+              (proxy-super drawAnnotations g2 data-area info)))))))
+
+(defn color-grid-lines
+  "Alter the grid-line color associated with the chart.
+   Whether gridlines show or not depends on visibility."
+  [chart color]
+  (doto (.getPlot chart)
+    (.setDomainGridlinePaint color)
+    (.setRangeGridlinePaint  color))
+  chart)
+
+(defn set-grid-lines
+  "Determines the visibility of the grid-lines.
+   grid-lines? may be one of #{nil :both :horizontal :vertical}"
+  [chart grid-lines?]
+  (doto (.getPlot chart)
+    (.setDomainGridlinesVisible  (case grid-lines?
+                                       (:both :horizontal) true false))
+    (.setRangeGridlinesVisible   (case grid-lines?
+                                       (:both :vertical) true false)))
+  chart)
+
+(defn black-grid-lines
+  "Sets all grid-lines to black, rather than the white
+   default theme."
+  [chart] (color-grid-lines chart  java.awt.Color/black))
+
+
+(fn [idx color]
+  (.add scale
+        (+ min-z (* (/ idx (count colors)) (- max-z min-z)))
+        (apply #(java.awt.Color. %1 %2 %3) color)))
+
+(defn ->paint-scale
+  "Constructs a JFREE Chart paint scale from the parameters, to be
+   used with an XYPlot renderer."
+  ([min max colors]
+   (org.jfree.chart.renderer.LookupPaintScale. min max java.awt.Color/white))
+  ([min max]
+   (org.jfree.chart.renderer.GrayPaintScale. min max)))
+
+(defprotocol IPaintScale
+  (as-paint-scale [x]))
+
+;;expects a [value color]
+;;could it be categorical?
+;;defer until we need a heatmap.
+#_(defn map->paint-scale [m]
+  (let [l (reduce min (keys m))
+        u (reduce max (keys m))]
+    (sort-by
+     )))
+
+(extend-protocol IPaintScale
+  clojure.lang.PersistentArrayMap
+  (as-paint-scale [m]))
+
+(defn ->paint-scale-legend [^PaintScale scale ^ValueAxis axis]
+  (org.jfree.chart.title.PaintScaleLegend. scale scale-axis))
+
+(defn falsey [v]
+  (if (false? v) true false))
+
+(defn ^NumberAxis ->number-axis
+  ([label] (org.jfree.chart.axis.NumberAxis. (str label)))
+  ([label {:keys [units line-color tick-color include-zero?
+                  lower-margin upper-margin]
+           :or {lower-margin 0.0
+                upper-margin 0.0
+                line-color :white
+                tick-color :white} :as opts}]
+   (doto (org.jfree.chart.axis.NumberAxis. (str label))
+     (.setStandardTickUnits (case units
+                              :integer (org.jfree.chart.axis.NumberAxis/createIntegerTickUnits)
+                              (org.jfree.chart.axis.NumberAxis/createStandardTickUnits)))
+     (.setLowerMargin lower-margin)
+     (.setUpperMargin upper-margin)
+     (.setAxisLinePaint (as-color line-color))
+     (.setTickMarkPaint (as-color tick-color))
+     (.setAutoRangeIncludesZero include-zero?))))
+
+#_(defn ^SymbolAxis ->symbol-axis [label symbols]
+  (org.jfree.chart.axis.SymbolAxis. (str label)
+                                    (into-array (map str symbols))))
+
+
 (defn heat-map*
   ([function x-min x-max y-min y-max & options]
-     (let [opts (when options (apply assoc {} options))
+     (let [opts   (when options (apply assoc {} options))
            color? (if (false? (:color? opts)) false true)
            include-zero? (if (false? (:include-zero? opts)) false true)
-           title (or (:title opts) "")
+           title   (or (:title opts) "")
            x-label (or (:x-label opts) "")
            y-label (or (:y-label opts) "")
            z-label (or (:z-label opts) "z scale")
            x-res   (or (:x-res opts) 100)
            y-res   (or (:y-res opts) 100)
            auto-scale? (if (false? (:auto-scale? opts)) false true)
+           grid-lines?  (:grid-lines? opts)
            block-width  (double (/ (- x-max x-min) x-res))
            block-height (double (/ (- y-max y-min) y-res))
-           theme (or (:theme opts) :default)
+           theme (or (:theme opts) #(-> (set-theme % :default)
+                                        (set-grid-lines grid-lines?)
+                                        (black-grid-lines)))
            xyz-dataset (org.jfree.data.xy.DefaultXYZDataset.)
            data (into-array (map double-array
                                  (grid-apply function x-min x-max y-min y-max x-res y-res)))
@@ -2943,22 +3075,23 @@
                              (+ min-z (* (/ idx (count colors)) (- max-z min-z)))
                              (apply #(java.awt.Color. %1 %2 %3) color)))
            scale-axis (org.jfree.chart.axis.NumberAxis. z-label)
-           legend (org.jfree.chart.title.PaintScaleLegend. scale scale-axis)
-           renderer (org.jfree.chart.renderer.xy.XYBlockRenderer.)
+           legend     (org.jfree.chart.title.PaintScaleLegend. scale scale-axis)
+           renderer   (org.jfree.chart.renderer.xy.XYBlockRenderer.)
            _       (when auto-scale?
                      (doto renderer
                        (.setBlockWidth block-width)
                        (.setBlockHeight block-height)))
-           plot (org.jfree.chart.plot.XYPlot. xyz-dataset x-axis y-axis renderer)
+           plot  (if grid-lines?
+                   (->grided-xy-plot xyz-dataset x-axis y-axis renderer)
+                   (org.jfree.chart.plot.XYPlot. xyz-dataset x-axis y-axis renderer))
            chart (org.jfree.chart.JFreeChart. plot)]
        (do
          (.setPaintScale renderer scale)
          (when color? (doseq [i (range (count colors))]
                         (add-color i (nth colors i))))
          (.addSeries xyz-dataset "Series 1" data)
-         (.setBackgroundPaint plot java.awt.Color/lightGray)
-         (.setDomainGridlinesVisible plot false)
-         (.setRangeGridlinePaint plot java.awt.Color/white)
+         ;;should extract these into a theme.
+         (.setBackgroundPaint plot java.awt.Color/lightGray)        
          (.setAxisOffset plot (org.jfree.ui.RectangleInsets. 5 5 5 5))
          (.setOutlinePaint plot java.awt.Color/blue)
          (.removeLegend chart)
@@ -2973,7 +3106,8 @@
          (.setTitle chart title)
          (.addSubtitle chart legend)
          (org.jfree.chart.ChartUtilities/applyCurrentTheme chart)
-         (set-theme chart theme))
+         (set-theme chart theme)
+         )
        chart)))
 
 
@@ -3012,6 +3146,8 @@
     :y-res   (default 100) -- amount of samples to take in the y range
     :auto-scale? (default true) -- automatically scale the block
                                    width/height to provide a continuous surface
+    :grid-lines? (:both)|:vertical|:horizontal -- renders grid-lines for the
+                                                heat-map
 
   Examples:
     (use '(incanter core charts))
