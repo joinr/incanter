@@ -33,7 +33,8 @@
              :as core]
         [incanter.stats :refer [quantile quantile-normal cumulative-mean
                                sd correlation variance]]
-        [clj-time.coerce :refer [to-date]])
+        [clj-time.coerce :refer [to-date]]
+        [incanter.color :as color])
   (:import  [java.io File]
             [javax.imageio ImageIO]
             [javax.swing JSlider JFrame JLabel JPanel]
@@ -50,7 +51,7 @@
                              JFreeChart
                              LegendItem
                              LegendItemCollection]
-            [org.jfree.chart.axis AxisSpace NumberAxis AxisLocation LogAxis]
+            [org.jfree.chart.axis AxisSpace NumberAxis AxisLocation LogAxis ValueAxis]
             [org.jfree.chart.plot PlotOrientation
                                   DatasetRenderingOrder
                                   SeriesRenderingOrder
@@ -66,6 +67,7 @@
                                          XYBarRenderer
                                          XYSplineRenderer
                                          StandardXYBarPainter]
+            [org.jfree.chart.renderer PaintScale]
             [org.jfree.ui TextAnchor RectangleInsets RectangleEdge]
             [org.jfree.chart.title TextTitle]
             [org.jfree.data UnknownKeyException]
@@ -2967,7 +2969,7 @@
   [chart] (color-grid-lines chart  java.awt.Color/black))
 
 
-(fn [idx color]
+#_(fn [idx color]
   (.add scale
         (+ min-z (* (/ idx (count colors)) (- max-z min-z)))
         (apply #(java.awt.Color. %1 %2 %3) color)))
@@ -2983,6 +2985,25 @@
 (defprotocol IPaintScale
   (as-paint-scale [x]))
 
+(defprotocol IChartColor
+  (chart-color [x] "coerce x into a color format we can use for charting.
+                    Currently only awt is supported as a backend;
+                    look into changing implementation options for
+                    generality, ala using cljs libs.
+                    x should support incanter.color/IColor,
+                    providing an rgba encoding in values
+                    ranging from [0 255] for each component."))
+
+(extend-protocol IChartColor
+  clojure.lang.PersistentVector
+  (chart-color [v] (java.awt.Color.  (int (color/get-r v))
+                                     (int (color/get-g v))
+                                     (int (color/get-b v))
+                                     (int (color/get-a v))))
+  clojure.lang.Keyword
+  (chart-color [k]  (chart-color (color/get-color k)))
+  )
+
 ;;expects a [value color]
 ;;could it be categorical?
 ;;defer until we need a heatmap.
@@ -2997,7 +3018,7 @@
   (as-paint-scale [m]))
 
 (defn ->paint-scale-legend [^PaintScale scale ^ValueAxis axis]
-  (org.jfree.chart.title.PaintScaleLegend. scale scale-axis))
+  (org.jfree.chart.title.PaintScaleLegend. scale axis))
 
 (defn falsey [v]
   (if (false? v) true false))
@@ -3016,8 +3037,8 @@
                               (org.jfree.chart.axis.NumberAxis/createStandardTickUnits)))
      (.setLowerMargin lower-margin)
      (.setUpperMargin upper-margin)
-     (.setAxisLinePaint (as-color line-color))
-     (.setTickMarkPaint (as-color tick-color))
+     (.setAxisLinePaint (chart-color line-color))
+     (.setTickMarkPaint (chart-color tick-color))
      (.setAutoRangeIncludesZero include-zero?))))
 
 #_(defn ^SymbolAxis ->symbol-axis [label symbols]
