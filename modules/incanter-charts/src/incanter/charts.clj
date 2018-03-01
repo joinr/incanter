@@ -3045,6 +3045,45 @@
   (org.jfree.chart.axis.SymbolAxis. (str label)
                                     (into-array (map str symbols))))
 
+;;defines a color scale gradient from [blue red] [min max]
+(def +default-heat-colors+
+  [[0 0 127] [0 0 212] [0 42 255] [0 127 255] [0 127 255]
+   [0 226 255] [42 255 212] [56 255 198] [255 212 0] [255 198 0]
+   [255 169 0] [255 112 0] [255 56 0] [255 14 0] [255 42 0]
+   [226 0 0]])
+
+(defn ->grey-paint-scale [min-val max-val]
+  (org.jfree.chart.renderer.GrayPaintScale. min-val max-val))
+
+;;what we're doing here is normalizing the scales.
+;;establishing a mapping between color values and
+;;an ordinal color scale.
+;; (defn normalize-range [n categories len lower upper]
+;;   (let [categories (vec   categories)
+;;         len        (count categories)]
+;;     (map-indexed (fn [idx cat]
+;;                    [i (nth categories (+ lower (* i (/ i len) (- upper lower))))]
+;;                    ) categories)))
+
+;; (defn add-scale-color [scale idx color]
+;;   (doto scale
+;;     (.add (+ min-z (* (/ idx (count colors)) (- max-z min-z)))
+;;           (apply #(java.awt.Color. %1 %2 %3) color))))
+;; ([{:keys [colors min max]}]
+ 
+;; (defn ->paint-scale
+;;   ([min-val max-val] 
+;;   ([min-val max-val colors]
+;;    (org.jfree.chart.renderer.LookupPaintScale. min-val max-val java.awt.Color/white)
+;;    (doseq [i (range (count colors))]
+;;      (add-color i (nth colors i)))))
+
+;;    ))
+
+
+
+
+;;So, we want to construct a chart..
 
 (defn heat-map*
   ([function x-min x-max y-min y-max & options]
