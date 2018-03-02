@@ -9,5 +9,6 @@
   :min-lein-version "2.0.0"
   :dependencies [[incanter/incanter-io "1.9.3-SNAPSHOT"]
                  [org.jfree/jfreechart "1.0.19"]
+                 [thi.ng/color "0.3.0"]
                  [clj-time "0.14.0" :exclusions [org.clojure/clojure]]]
   )

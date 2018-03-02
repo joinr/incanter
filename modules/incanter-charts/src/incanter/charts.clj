@@ -67,7 +67,7 @@
                                          XYBarRenderer
                                          XYSplineRenderer
                                          StandardXYBarPainter]
-            [org.jfree.chart.renderer PaintScale]
+            [org.jfree.chart.renderer PaintScale LookupPaintScale GrayPaintScale]
             [org.jfree.ui TextAnchor RectangleInsets RectangleEdge]
             [org.jfree.chart.title TextTitle]
             [org.jfree.data UnknownKeyException]
@@ -3045,46 +3045,127 @@
   (org.jfree.chart.axis.SymbolAxis. (str label)
                                     (into-array (map str symbols))))
 
-;;defines a color scale gradient from [blue red] [min max]
-(def +default-heat-colors+
-  [[0 0 127] [0 0 212] [0 42 255] [0 127 255] [0 127 255]
-   [0 226 255] [42 255 212] [56 255 198] [255 212 0] [255 198 0]
-   [255 169 0] [255 112 0] [255 56 0] [255 14 0] [255 42 0]
+(defn spread
+  "Distribute a coll of xs across the numeric range [min max]
+   by normalizing the count of xs relative the distance between
+   max and min.  Caller can supply a function f to apply to the
+   keys, otherwise defaults to rational division."
+  ([min max f xs]
+  (let [distance (- max min)
+        xs       (vec    xs)
+        len      (count  xs)
+        step     (/ distance (dec len))]
+    (map-indexed (fn [idx x]
+                   [(f (+ (* idx step) min))
+                    x]) xs)))
+  ([min max xs] (spread min max identity xs)))
+
+(defn spread-doubles
+  "Like spread, with double values as indices."
+  [min max xs]
+  (spread min max double xs))
+
+(defn spread-ints
+  "Like spread, with integer values derived by
+   truncating indices via long."
+  [min max xs]
+  (spread min max long xs))
+
+(def byr-gradient
+  [[0 0 127]
+   [0 0 212]
+   [0 42 255]
+   [0 127 255]
+   [0 127 255]
+   [0 226 255]
+   [42 255 212]
+   [56 255 198]
+   [255 212 0]
+   [255 198 0]
+   [255 169 0]
+   [255 112 0]
+   [255 56 0]
+   [255 14 0]
+   [255 42 0]
    [226 0 0]])
 
-(defn ->grey-paint-scale [min-val max-val]
+(def rg-gradient
+  [[229 0 18]
+   [206 19 16]
+   [184 38 14]
+   [162 57 12]
+   [140 76 10]
+   [118 95 9]
+   [95 114 7]
+   [73 133 5]
+   [29 171 1]
+   [7 191 0]])
+
+(def ryg-gradient
+  [[229 0 17]
+   [225 28 0]
+   [221 73 0]
+   [217 116 0]
+   [213 157 0]
+   [210 197 0]
+   [175 206 0]
+   [131 202 0]
+   [88 198 0]
+   [46 194 0]
+   [7 191 0]])
+
+;;defines a color scale gradient from [blue red] [min max]
+(def +default-heat-palette+
+  {:blue-yellow-red  byr-gradient
+   :red-yellow-blue  (vec (reverse byr-gradient))
+   :red-green        rg-gradient
+   :green-red        (vec (reverse rg-gradient))
+   :red-yellow-green ryg-gradient
+   :green-yellow-red (vec (reverse ryg-gradient))})
+
+(defn add-lookup-color [^LookupPaintScale scale v color]
+  (doto scale
+    (.add (double v)
+          ^java.awt.Paint (chart-color color))))
+
+;;a paint-scale, in jfreechart parlance, is a scale that maps
+;;a continuous range of values onto a discrete sequence of
+;;categories, where the categories have an associated java.awt.Paint.
+;;It provides
+;;get-lower :: unit   -> Double
+;;get-upper :: unit   -> Double
+;;get-paint :: double -> java.awt.Paint
+;;for use as a pluggable color palette with the xyblockrenderer.
+
+;;so, you get a lookup table
+;;mapping [0 1.0] to [0 n]
+;;for each n in [n color]
+
+;;I'd like an easy way to define these;
+#_{0        :green
+   20       :blue
+   50       :red
+   :default :black}
+
+;;currently wrapping jfree because that's what our default is...
+(defn map->color-scale [m]
+  (let [default (get m :default :white)
+        entries (vec (sort-by key (dissoc m :default)))
+        lower     (key (first entries))
+        upper     (key (last entries))
+        ^LookupPaintScale scale
+          (org.jfree.chart.renderer.LookupPaintScale.
+           (double lower)
+           (double upper)
+           ^java.awt.Paint (chart-color default))]
+    (reduce (fn [acc [n paint]]
+              (add-lookup-color acc n paint))
+            scale (drop 1 (butlast entries)))))
+
+(defn ->gray-paint-scale [min-val max-val]
   (org.jfree.chart.renderer.GrayPaintScale. min-val max-val))
 
-;;what we're doing here is normalizing the scales.
-;;establishing a mapping between color values and
-;;an ordinal color scale.
-;; (defn normalize-range [n categories len lower upper]
-;;   (let [categories (vec   categories)
-;;         len        (count categories)]
-;;     (map-indexed (fn [idx cat]
-;;                    [i (nth categories (+ lower (* i (/ i len) (- upper lower))))]
-;;                    ) categories)))
-
-;; (defn add-scale-color [scale idx color]
-;;   (doto scale
-;;     (.add (+ min-z (* (/ idx (count colors)) (- max-z min-z)))
-;;           (apply #(java.awt.Color. %1 %2 %3) color))))
-;; ([{:keys [colors min max]}]
- 
-;; (defn ->paint-scale
-;;   ([min-val max-val] 
-;;   ([min-val max-val colors]
-;;    (org.jfree.chart.renderer.LookupPaintScale. min-val max-val java.awt.Color/white)
-;;    (doseq [i (range (count colors))]
-;;      (add-color i (nth colors i)))))
-
-;;    ))
-
-
-
-
 ;;So, we want to construct a chart..
-
 (defn heat-map*
   ([function x-min x-max y-min y-max & options]
      (let [opts   (when options (apply assoc {} options))
@@ -3122,11 +3203,7 @@
                     (.setAxisLinePaint java.awt.Color/white)
                     (.setTickMarkPaint java.awt.Color/white)
                     (.setAutoRangeIncludesZero include-zero?))
-           colors (or (:colors opts)
-                      [[0 0 127] [0 0 212] [0 42 255] [0 127 255] [0 127 255]
-                       [0 226 255] [42 255 212] [56 255 198] [255 212 0] [255 198 0]
-                       [255 169 0] [255 112 0] [255 56 0] [255 14 0] [255 42 0]
-                       [226 0 0]])
+           colors   (or (:colors opts) (get +default-heat-palette+ :blue-yellow-red))
            scale (if color?
                    (org.jfree.chart.renderer.LookupPaintScale. min-z max-z java.awt.Color/white)
                    (org.jfree.chart.renderer.GrayPaintScale. min-z max-z))
