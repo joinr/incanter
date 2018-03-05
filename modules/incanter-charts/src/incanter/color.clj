@@ -46,7 +46,7 @@
   (get-r [c] (nth c 0))
   (get-g [c] (nth c 1))
   (get-b [c] (nth c 2))
-  (get-a [c] (nth c 3))
+  (get-a [c] (nth c 3 255))
   java.lang.Long
   (get-rgb [c] c)
   (get-r [c] (color-int (color/red (color/int->rgba c))))
@@ -245,7 +245,7 @@
           ;;added due to convenience
           [:amber [178 140 0]]]
          (for [[k n] presets/colors] ;;merge thi.ng color presets
-           [k (color-vec n)]))))
+           [k (assoc (color-vec n) 3 255)]))))
 
 (defn rgb-floor [xs]  [(int  (Math/floor (*  (nth xs 0) 255.0)))
                        (int  (Math/floor (*  (nth xs 1) 255.0)))
@@ -363,14 +363,15 @@
         (for [[k [l r]] brewer-schemes
               n         (range l (inc r))]
           [(keyword (str (name k) "-" n))
-           (fn [] (mapv color-vec (colorbrewer/brewer-scheme-int k n)))]
+           (fn [] (mapv #(assoc (color-vec %) 3 255) (colorbrewer/brewer-scheme-int k n)))]
           )))
 
 (def d3-pals
-  (let [c10  (mapv color-vec categories/cat10)
-        c20  (mapv color-vec categories/cat20)
-        c20b (mapv color-vec categories/cat20b)
-        c20c (mapv color-vec categories/cat20c)]
+  (let [opaque (fn [g] (assoc (color-vec g) 3 255))
+        c10  (mapv opaque categories/cat10)
+        c20  (mapv opaque categories/cat20)
+        c20b (mapv opaque categories/cat20b)
+        c20c (mapv opaque categories/cat20c)]
     {:cat10 c10
      :cat20 c20
      :cat20b c20b
@@ -385,7 +386,7 @@
   (or (get *palette* k)
       (throw (Exception. (str [:unknown-color! k])))))
 
-(defn get-pallete
+(defn get-palette
   ([k]
    (if-let [f (or (get brewer-pals k)
                   (get brewer-pals (keyword k)))]
