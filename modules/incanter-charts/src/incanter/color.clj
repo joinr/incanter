@@ -395,5 +395,5 @@
          (get d3-pals (keyword k))
          (throw (Exception. (str [:unkown-pallette! k]))))))
    ([k n]
-    (get-pallete (keyword (str (name k) "-" n)))
+    (get-palette (keyword (str (name k) "-" n)))
    ))
