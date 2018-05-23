@@ -599,7 +599,8 @@
            data-series (XYSeries. series-lab (:auto-sort opts true))
            points? (true? (:points opts))
            line-renderer (XYLineAndShapeRenderer. true points?)
-           data-set (XYSeriesCollection.)]
+           data-set (XYSeriesCollection.)
+                     _ (println series-lab)]
        (dorun
         (map (fn [x y]
                (if (and (not (nil? x))
@@ -612,7 +613,7 @@
         (.setDatasetRenderingOrder org.jfree.chart.plot.DatasetRenderingOrder/FORWARD)
         (.setDataset n data-set)
         (.setRenderer n line-renderer))
-      chart))
+      chart)))
 
 (defn extend-line
   " Add new data set to an exiting series if it already exists,
@@ -3282,7 +3283,7 @@
    the items specified by the maps.  Items should be of the form
    {:keys [text shape color]}."
   [items]
-  (let [_ (println items)
+  (let [;_ (println items)
         ^LegendItemCollection  coll
            (reduce (fn [^LegendItemCollection acc x]             
                      (doto acc (.add  (as-legend-item x))))
@@ -3309,7 +3310,7 @@
        (.setAxisLocation     (as-axis-location axis-location))
        (.setAxisOffset       axis-offset)
        (.setMargin           (org.jfree.ui.RectangleInsets. 5 5 5 5))
-       (.setFrame            (org.jfree.chart.block.BlockBorder. java.awt.Color/red))
+       ;(.setFrame            (org.jfree.chart.block.BlockBorder. java.awt.Color/red))
        (.setPadding          (org.jfree.ui.RectangleInsets. 10 10 10 10))
        (.setStripWidth       10)
        (.setPosition         (as-position position)))))
@@ -3317,7 +3318,7 @@
 
 (defn ->discrete-heat-legend
   ([items  options]
-   (let [opts options ;(apply assoc {} options)
+   (let [opts (merge default-heat-legend-options options) ;(apply assoc {} options)
          {:keys [frame
                  margin
                  padding
@@ -3325,7 +3326,7 @@
                  position]}    opts]
      (doto (->discrete-legend items)
        (.setMargin           (org.jfree.ui.RectangleInsets. 5 5 5 5))
-       (.setFrame            (org.jfree.chart.block.BlockBorder. java.awt.Color/red))
+       ;(.setFrame            (org.jfree.chart.block.BlockBorder. java.awt.Color/red))
        (.setPadding          (org.jfree.ui.RectangleInsets. 10 10 10 10))
        ;(.setStripWidth       10)
        (.setPosition         (as-position position))))))
@@ -4218,7 +4219,7 @@
    (let [{:keys [series dataset]
           :or {series 0 dataset 0}} (apply hash-map options)
           renderer (-> chart .getPlot (.getRenderer dataset))]
-     (.setSeriesPaint renderer series color)
+     (.setSeriesPaint renderer series (chart-color color))
      chart)))
 
 (defn set-point-size
