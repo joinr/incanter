@@ -3179,8 +3179,154 @@
     scale
     ))
 
+(def axis-locations
+  {:bottom-or-left org.jfree.chart.axis.AxisLocation/BOTTOM_OR_LEFT
+   :bottom-or-right org.jfree.chart.axis.AxisLocation/BOTTOM_OR_LEFT
+   :top-or-left org.jfree.chart.axis.AxisLocation/TOP_OR_LEFT
+   :top-or-right org.jfree.chart.axis.AxisLocation/TOP_OR_LEFT})
+
+(defn ^org.jfree.chart.axis.AxisLocation as-axis-location
+  [x]
+  (or (when (instance? org.jfree.chart.axis.AxisLocation x) x)
+      (get axis-locations x)
+      (throw (ex-info "invalid axis-location!" {:x x}))))
+
+(def positions
+  {:right  org.jfree.ui.RectangleEdge/RIGHT
+   :left   org.jfree.ui.RectangleEdge/LEFT
+   :top    org.jfree.ui.RectangleEdge/TOP
+   :bottom org.jfree.ui.RectangleEdge/BOTTOM})
+
+(defn ^org.jfree.ui.RectangleEdge as-position [x]
+  (or (when (instance? org.jfree.ui.RectangleEdge x) x)
+      (get positions x)
+      (throw (ex-info "invalid axis-location!" {:x x}))))
+
+(def default-heat-legend-options
+  {:axis-location :bottom-or-left
+   :subdivisions  20
+   :axis-offset   5.0
+   :frame         (org.jfree.chart.block.BlockBorder. java.awt.Color/red)
+   :margin        (org.jfree.ui.RectangleInsets. 5 5 5 5)
+   :padding       (org.jfree.ui.RectangleInsets. 10 10 10 10)
+   :strip-width   10
+   :position      :right})
+
+(defn ^org.jfree.chart.title.PaintScaleLegend ->heat-legend
+  "Defines a legend for a heatmap based on the PaintScaleLegend
+   JFreeChart class."
+  ([scale scale-axis legend-opts]
+   (let [{:keys [axis-location
+                 subdivisions
+                 axis-offset
+                 frame
+                 margin
+                 padding
+                 strip-width
+                 position]} legend-opts
+         _ (println subdivisions)]
+     (doto (org.jfree.chart.title.PaintScaleLegend. scale scale-axis)
+       (.setSubdivisionCount subdivisions)
+       (.setAxisLocation     (as-axis-location axis-location))
+       (.setAxisOffset       axis-offset)
+       (.setMargin           (org.jfree.ui.RectangleInsets. 5 5 5 5))
+       (.setFrame            (org.jfree.chart.block.BlockBorder. java.awt.Color/red))
+       (.setPadding          (org.jfree.ui.RectangleInsets. 10 10 10 10))
+       (.setStripWidth       10)
+       (.setPosition        (as-position position)))))
+  ([scale scale-axis] (->heat-legend scale scale-axis default-heat-legend-options)))
+
 ;;So, we want to construct a chart..
 (defn heat-map*
+  ([function x-min x-max y-min y-max & options]
+     (let [opts   (when options (apply assoc {} options))
+           color? (if (false? (:color? opts)) false true)
+           include-zero? (if (false? (:include-zero? opts)) false true)
+           title   (or (:title opts) "")
+           x-label (or (:x-label opts) "")
+           y-label (or (:y-label opts) "")
+           z-label (or (:z-label opts) "z scale")
+           x-res   (or (:x-res opts) 100)
+           y-res   (or (:y-res opts) 100)
+           auto-scale? (if (false? (:auto-scale? opts)) false true)
+           grid-lines?  (:grid-lines? opts)
+           discrete-legend? (:discrete-legend? opts)
+           block-width  (double (/ (- x-max x-min) x-res))
+           block-height (double (/ (- y-max y-min) y-res))
+           theme (or (:theme opts) #(-> (set-theme % :default)
+                                        (set-grid-lines grid-lines?)
+                                        (black-grid-lines)))
+           xyz-dataset (org.jfree.data.xy.DefaultXYZDataset.)
+           data (into-array (map double-array
+                                 (grid-apply function x-min x-max y-min y-max x-res y-res)))
+           x-axis (doto (org.jfree.chart.axis.NumberAxis. x-label)
+                    (.setStandardTickUnits (org.jfree.chart.axis.NumberAxis/createIntegerTickUnits))
+                    (.setLowerMargin 0.0)
+                    (.setUpperMargin 0.0)
+                    (.setAxisLinePaint java.awt.Color/white)
+                    (.setTickMarkPaint java.awt.Color/white)
+                    (.setAutoRangeIncludesZero include-zero?))
+           y-axis (doto (org.jfree.chart.axis.NumberAxis. y-label)
+                    (.setStandardTickUnits (org.jfree.chart.axis.NumberAxis/createIntegerTickUnits))
+                    (.setLowerMargin 0.0)
+                    (.setUpperMargin 0.0)
+                    (.setAxisLinePaint java.awt.Color/white)
+                    (.setTickMarkPaint java.awt.Color/white)
+                    (.setAutoRangeIncludesZero include-zero?))
+           ;;all color scale stuff.
+           colors   (or (:colors opts) (get +default-heat-palette+ :blue-yellow-red))
+           colors   (if (keyword? colors) (or (get +default-heat-palette+ colors)
+                                              (color/get-palette colors) 
+                                              (throw (Exception. (str [:unknown-pallete colors]))))
+                        colors)
+           min-z    (or (:min-z opts) (reduce min (last data)))
+           max-z    (or (:max-z opts) (reduce max (last data)))           
+           scale      (derive-color-scale colors min-z max-z color?)
+           scale-axis (org.jfree.chart.axis.NumberAxis. z-label)
+           legend     (->heat-legend scale scale-axis (let  [m (merge default-heat-legend-options                                                             
+                                                                        opts
+                                                                        (when discrete-legend?
+                                                                          {:subdivisions (count colors)}))
+                                                            _  (println m)]
+                                                        m))
+                      #_(org.jfree.chart.title.PaintScaleLegend. scale scale-axis)
+           renderer   (org.jfree.chart.renderer.xy.XYBlockRenderer.)
+           _       (when auto-scale?
+                     (doto renderer
+                       (.setBlockWidth block-width)
+                       (.setBlockHeight block-height)))
+           plot  (if grid-lines?
+                   (->grided-xy-plot xyz-dataset x-axis y-axis renderer)
+                   (org.jfree.chart.plot.XYPlot. xyz-dataset x-axis y-axis renderer))
+           chart (org.jfree.chart.JFreeChart. plot)]
+       (do
+         (.setPaintScale renderer scale)
+         (.addSeries xyz-dataset "Series 1" data)
+         ;;should extract these into a theme.
+         (.setBackgroundPaint plot java.awt.Color/lightGray)        
+         (.setAxisOffset plot (org.jfree.ui.RectangleInsets. 5 5 5 5))
+         (.setOutlinePaint plot java.awt.Color/blue)
+         (.removeLegend chart) ;;eliminate default legend.
+         ;;move this up?  This is all legend setup.
+    
+         ;; (.setSubdivisionCount legend subdivisions)
+         ;; (.setAxisLocation legend org.jfree.chart.axis.AxisLocation/BOTTOM_OR_LEFT)
+         ;; (.setAxisOffset legend 5.0)
+         ;; (.setMargin legend (org.jfree.ui.RectangleInsets. 5 5 5 5))
+         ;; (.setFrame legend (org.jfree.chart.block.BlockBorder. java.awt.Color/red))
+         ;; (.setPadding legend (org.jfree.ui.RectangleInsets. 10 10 10 10))
+         ;; (.setStripWidth legend 10)
+         ;; (.setPosition legend org.jfree.ui.RectangleEdge/RIGHT)
+         
+         (.setTitle chart title)
+         (.addSubtitle chart legend)
+         (org.jfree.chart.ChartUtilities/applyCurrentTheme chart)
+         (set-theme chart theme)
+         )
+       chart)))
+
+;;So, we want to construct a chart..
+#_(defn heat-map*
   ([function x-min x-max y-min y-max & options]
      (let [opts   (when options (apply assoc {} options))
            color? (if (false? (:color? opts)) false true)
@@ -3304,6 +3450,8 @@
     :y-res   (default 100) -- amount of samples to take in the y range
     :auto-scale? (default true) -- automatically scale the block
                                    width/height to provide a continuous surface
+    :discrete-legend? (default false) -- automatically subdivide the legend to match
+                                         the discrete color scale vs. fixed subdivisions.
     :grid-lines? (:both)|:vertical|:horizontal -- renders grid-lines for the
                                                 heat-map
     :min-z (defaults to minumum z from data) -- lower end of the color-scale
