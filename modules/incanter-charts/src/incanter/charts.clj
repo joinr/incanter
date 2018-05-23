@@ -49,7 +49,8 @@
                              ChartTheme
                              StandardChartTheme
                              JFreeChart
-                             LegendItem
+                             LegendItem                        
+                             LegendItemSource
                              LegendItemCollection]
             [org.jfree.chart.axis AxisSpace NumberAxis AxisLocation LogAxis ValueAxis]
             [org.jfree.chart.plot PlotOrientation
@@ -69,7 +70,7 @@
                                          StandardXYBarPainter]
             [org.jfree.chart.renderer PaintScale LookupPaintScale GrayPaintScale]
             [org.jfree.ui TextAnchor RectangleInsets RectangleEdge]
-            [org.jfree.chart.title TextTitle]
+            [org.jfree.chart.title TextTitle LegendTitle]
             [org.jfree.data UnknownKeyException]
             [org.jfree.chart.annotations XYPointerAnnotation
                                          XYTextAnnotation
@@ -584,6 +585,34 @@
         (.setDataset n data-set)
         (.setRenderer n line-renderer))
       chart)))
+
+;;hack that allows us to add lines to a heatmap.
+(defmethod add-lines* org.jfree.data.xy.DefaultXYZDataset
+  ([chart x y & options]
+     (let [opts (when options (apply assoc {} options))
+           data (or (:data opts) $data)
+           _x (data-as-list x data)
+           _y (data-as-list y data)
+           data-plot (.getPlot chart)
+           n (.getDatasetCount data-plot)
+           series-lab (or (:series-label opts) (format "%s, %s" 'x 'y))
+           data-series (XYSeries. series-lab (:auto-sort opts true))
+           points? (true? (:points opts))
+           line-renderer (XYLineAndShapeRenderer. true points?)
+           data-set (XYSeriesCollection.)]
+       (dorun
+        (map (fn [x y]
+               (if (and (not (nil? x))
+                        (not (nil? y)))
+                 (.add data-series (double x) (double y))))
+             _x _y))
+      (.addSeries data-set data-series)
+      (doto data-plot
+        (.setSeriesRenderingOrder org.jfree.chart.plot.SeriesRenderingOrder/FORWARD)
+        (.setDatasetRenderingOrder org.jfree.chart.plot.DatasetRenderingOrder/FORWARD)
+        (.setDataset n data-set)
+        (.setRenderer n line-renderer))
+      chart))
 
 (defn extend-line
   " Add new data set to an exiting series if it already exists,
@@ -3006,6 +3035,10 @@
   (chart-color [c] c)
   java.awt.Paint
   (chart-color [p] p)
+  clojure.lang.PersistentArrayMap
+  (chart-color [m] (chart-color (m :color)))
+  clojure.lang.PersistentHashMap
+  (chart-color [m] (chart-color (m :color)))
   )
 
 ;;expects a [value color]
@@ -3212,6 +3245,53 @@
    :strip-width   10
    :position      :right})
 
+(defprotocol ILegendItem
+  (as-legend-item [x]))
+
+ 
+
+;;dumb place-holder for custom legends. Damn!
+(defn ->rect [x y w h]
+  (java.awt.Rectangle. x y w h))
+
+(def legend-item-defaults
+  {:shape       (->rect 0 0 20 20)
+   :description ""
+   :tooltip     ""
+   :url         ""})
+
+(defn ^LegendItem ->legend-item
+  ([text shape color description tooltip url]
+   (LegendItem. (str text) (str description) (str tooltip) (str url)
+                shape (chart-color color)))
+  ([m]
+   (let [{:keys [text shape color description tooltip url]}
+             (merge legend-item-defaults m)]
+     (->legend-item text shape color description tooltip url))))
+
+(extend-protocol ILegendItem
+  LegendItem
+  (as-legend-item [x] x)
+  clojure.lang.PersistentArrayMap
+  (as-legend-item [m] (->legend-item m))
+  clojure.lang.PersistentHashMap
+  (as-legend-item [m] (->legend-item m))) 
+
+(defn ->discrete-legend
+  "Given a sequence of maps, creates a discrete legend that corresponds to
+   the items specified by the maps.  Items should be of the form
+   {:keys [text shape color]}."
+  [items]
+  (let [_ (println items)
+        ^LegendItemCollection  coll
+           (reduce (fn [^LegendItemCollection acc x]             
+                     (doto acc (.add  (as-legend-item x))))
+                   (LegendItemCollection.) items)
+        source    (reify
+                    LegendItemSource
+                    (^LegendItemCollection getLegendItems [this] coll))]
+    (LegendTitle. source)))
+
 (defn ^org.jfree.chart.title.PaintScaleLegend ->heat-legend
   "Defines a legend for a heatmap based on the PaintScaleLegend
    JFreeChart class."
@@ -3223,8 +3303,7 @@
                  margin
                  padding
                  strip-width
-                 position]} legend-opts
-         _ (println subdivisions)]
+                 position]} legend-opts]
      (doto (org.jfree.chart.title.PaintScaleLegend. scale scale-axis)
        (.setSubdivisionCount subdivisions)
        (.setAxisLocation     (as-axis-location axis-location))
@@ -3233,8 +3312,23 @@
        (.setFrame            (org.jfree.chart.block.BlockBorder. java.awt.Color/red))
        (.setPadding          (org.jfree.ui.RectangleInsets. 10 10 10 10))
        (.setStripWidth       10)
-       (.setPosition        (as-position position)))))
+       (.setPosition         (as-position position)))))
   ([scale scale-axis] (->heat-legend scale scale-axis default-heat-legend-options)))
+
+(defn ->discrete-heat-legend
+  ([items  options]
+   (let [opts options ;(apply assoc {} options)
+         {:keys [frame
+                 margin
+                 padding
+                 strip-width
+                 position]}    opts]
+     (doto (->discrete-legend items)
+       (.setMargin           (org.jfree.ui.RectangleInsets. 5 5 5 5))
+       (.setFrame            (org.jfree.chart.block.BlockBorder. java.awt.Color/red))
+       (.setPadding          (org.jfree.ui.RectangleInsets. 10 10 10 10))
+       ;(.setStripWidth       10)
+       (.setPosition         (as-position position))))))
 
 ;;So, we want to construct a chart..
 (defn heat-map*
@@ -3259,6 +3353,7 @@
            xyz-dataset (org.jfree.data.xy.DefaultXYZDataset.)
            data (into-array (map double-array
                                  (grid-apply function x-min x-max y-min y-max x-res y-res)))
+           ;;TODO replace with ->number-axis....
            x-axis (doto (org.jfree.chart.axis.NumberAxis. x-label)
                     (.setStandardTickUnits (org.jfree.chart.axis.NumberAxis/createIntegerTickUnits))
                     (.setLowerMargin 0.0)
@@ -3266,6 +3361,7 @@
                     (.setAxisLinePaint java.awt.Color/white)
                     (.setTickMarkPaint java.awt.Color/white)
                     (.setAutoRangeIncludesZero include-zero?))
+           ;;TODO replace with ->number-axis....
            y-axis (doto (org.jfree.chart.axis.NumberAxis. y-label)
                     (.setStandardTickUnits (org.jfree.chart.axis.NumberAxis/createIntegerTickUnits))
                     (.setLowerMargin 0.0)
@@ -3281,15 +3377,23 @@
                         colors)
            min-z    (or (:min-z opts) (reduce min (last data)))
            max-z    (or (:max-z opts) (reduce max (last data)))           
-           scale      (derive-color-scale colors min-z max-z color?)
-           scale-axis (org.jfree.chart.axis.NumberAxis. z-label)
-           legend     (->heat-legend scale scale-axis (let  [m (merge default-heat-legend-options                                                             
-                                                                        opts
-                                                                        (when discrete-legend?
-                                                                          {:subdivisions (count colors)}))
-                                                            _  (println m)]
-                                                        m))
-                      #_(org.jfree.chart.title.PaintScaleLegend. scale scale-axis)
+           scale       (derive-color-scale colors min-z max-z color?)
+           scale-axis  (org.jfree.chart.axis.NumberAxis. z-label)
+           color->item (into {} (map (fn [[threshold color :as c]]
+                                       [c (if (map? color) color
+                                              {:text  (str threshold)
+                                               :color  color}
+                                              )]) colors))                          
+           legend     (if discrete-legend?
+                        (->discrete-heat-legend (map color->item colors) (merge default-heat-legend-options                                                     
+                                                                                opts
+                                                                                (:legend-options opts)
+                                                                                ))
+                        (->heat-legend scale scale-axis
+                                       (merge default-heat-legend-options                                                     
+                                              opts
+                                              (:legend-options opts)
+                                            )))
            renderer   (org.jfree.chart.renderer.xy.XYBlockRenderer.)
            _       (when auto-scale?
                      (doto renderer
@@ -3307,113 +3411,12 @@
          (.setAxisOffset plot (org.jfree.ui.RectangleInsets. 5 5 5 5))
          (.setOutlinePaint plot java.awt.Color/blue)
          (.removeLegend chart) ;;eliminate default legend.
-         ;;move this up?  This is all legend setup.
-    
-         ;; (.setSubdivisionCount legend subdivisions)
-         ;; (.setAxisLocation legend org.jfree.chart.axis.AxisLocation/BOTTOM_OR_LEFT)
-         ;; (.setAxisOffset legend 5.0)
-         ;; (.setMargin legend (org.jfree.ui.RectangleInsets. 5 5 5 5))
-         ;; (.setFrame legend (org.jfree.chart.block.BlockBorder. java.awt.Color/red))
-         ;; (.setPadding legend (org.jfree.ui.RectangleInsets. 10 10 10 10))
-         ;; (.setStripWidth legend 10)
-         ;; (.setPosition legend org.jfree.ui.RectangleEdge/RIGHT)
-         
          (.setTitle chart title)
          (.addSubtitle chart legend)
          (org.jfree.chart.ChartUtilities/applyCurrentTheme chart)
          (set-theme chart theme)
          )
        chart)))
-
-;;So, we want to construct a chart..
-#_(defn heat-map*
-  ([function x-min x-max y-min y-max & options]
-     (let [opts   (when options (apply assoc {} options))
-           color? (if (false? (:color? opts)) false true)
-           include-zero? (if (false? (:include-zero? opts)) false true)
-           title   (or (:title opts) "")
-           x-label (or (:x-label opts) "")
-           y-label (or (:y-label opts) "")
-           z-label (or (:z-label opts) "z scale")
-           x-res   (or (:x-res opts) 100)
-           y-res   (or (:y-res opts) 100)
-           auto-scale? (if (false? (:auto-scale? opts)) false true)
-           grid-lines?  (:grid-lines? opts)
-           block-width  (double (/ (- x-max x-min) x-res))
-           block-height (double (/ (- y-max y-min) y-res))
-           theme (or (:theme opts) #(-> (set-theme % :default)
-                                        (set-grid-lines grid-lines?)
-                                        (black-grid-lines)))
-           xyz-dataset (org.jfree.data.xy.DefaultXYZDataset.)
-           data (into-array (map double-array
-                                 (grid-apply function x-min x-max y-min y-max x-res y-res)))
-           x-axis (doto (org.jfree.chart.axis.NumberAxis. x-label)
-                    (.setStandardTickUnits (org.jfree.chart.axis.NumberAxis/createIntegerTickUnits))
-                    (.setLowerMargin 0.0)
-                    (.setUpperMargin 0.0)
-                    (.setAxisLinePaint java.awt.Color/white)
-                    (.setTickMarkPaint java.awt.Color/white)
-                    (.setAutoRangeIncludesZero include-zero?))
-           y-axis (doto (org.jfree.chart.axis.NumberAxis. y-label)
-                    (.setStandardTickUnits (org.jfree.chart.axis.NumberAxis/createIntegerTickUnits))
-                    (.setLowerMargin 0.0)
-                    (.setUpperMargin 0.0)
-                    (.setAxisLinePaint java.awt.Color/white)
-                    (.setTickMarkPaint java.awt.Color/white)
-                    (.setAutoRangeIncludesZero include-zero?))
-           ;;all color scale stuff.
-           colors   (or (:colors opts) (get +default-heat-palette+ :blue-yellow-red))
-           colors   (if (keyword? colors) (or (get +default-heat-palette+ colors)
-                                              (color/get-palette colors) 
-                                              (throw (Exception. (str [:unknown-pallete colors]))))
-                        colors)
-           min-z    (or (:min-z opts) (reduce min (last data)))
-           max-z    (or (:max-z opts) (reduce max (last data)))
-           ;; scale    (if color?
-           ;;            (org.jfree.chart.renderer.LookupPaintScale. min-z max-z java.awt.Color/white)
-           ;;            (org.jfree.chart.renderer.GrayPaintScale. min-z max-z))
-           ;; add-color (fn [idx color]
-           ;;             (.add scale
-           ;;                   (+ min-z (* (/ idx (count colors)) (- max-z min-z)))
-           ;;                   (apply #(java.awt.Color. %1 %2 %3) color)))
-           ;; _          (when color? (doseq [i (range (count colors))]
-           ;;                           (add-color i (nth colors i))))
-           
-           scale  (derive-color-scale colors min-z max-z color?)
-           scale-axis (org.jfree.chart.axis.NumberAxis. z-label)
-           legend     (org.jfree.chart.title.PaintScaleLegend. scale scale-axis)
-           renderer   (org.jfree.chart.renderer.xy.XYBlockRenderer.)
-           _       (when auto-scale?
-                     (doto renderer
-                       (.setBlockWidth block-width)
-                       (.setBlockHeight block-height)))
-           plot  (if grid-lines?
-                   (->grided-xy-plot xyz-dataset x-axis y-axis renderer)
-                   (org.jfree.chart.plot.XYPlot. xyz-dataset x-axis y-axis renderer))
-           chart (org.jfree.chart.JFreeChart. plot)]
-       (do
-         (.setPaintScale renderer scale)
-         (.addSeries xyz-dataset "Series 1" data)
-         ;;should extract these into a theme.
-         (.setBackgroundPaint plot java.awt.Color/lightGray)        
-         (.setAxisOffset plot (org.jfree.ui.RectangleInsets. 5 5 5 5))
-         (.setOutlinePaint plot java.awt.Color/blue)
-         (.removeLegend chart)
-         (.setSubdivisionCount legend 20)
-         (.setAxisLocation legend org.jfree.chart.axis.AxisLocation/BOTTOM_OR_LEFT)
-         (.setAxisOffset legend 5.0)
-         (.setMargin legend (org.jfree.ui.RectangleInsets. 5 5 5 5))
-         (.setFrame legend (org.jfree.chart.block.BlockBorder. java.awt.Color/red))
-         (.setPadding legend (org.jfree.ui.RectangleInsets. 10 10 10 10))
-         (.setStripWidth legend 10)
-         (.setPosition legend org.jfree.ui.RectangleEdge/RIGHT)
-         (.setTitle chart title)
-         (.addSubtitle chart legend)
-         (org.jfree.chart.ChartUtilities/applyCurrentTheme chart)
-         (set-theme chart theme)
-         )
-       chart)))
-
 
 (defmacro heat-map
   "
