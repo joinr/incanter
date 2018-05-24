@@ -599,8 +599,7 @@
            data-series (XYSeries. series-lab (:auto-sort opts true))
            points? (true? (:points opts))
            line-renderer (XYLineAndShapeRenderer. true points?)
-           data-set (XYSeriesCollection.)
-                     _ (println series-lab)]
+           data-set (XYSeriesCollection.)]
        (dorun
         (map (fn [x y]
                (if (and (not (nil? x))
@@ -3283,8 +3282,7 @@
    the items specified by the maps.  Items should be of the form
    {:keys [text shape color]}."
   [items]
-  (let [;_ (println items)
-        ^LegendItemCollection  coll
+  (let [^LegendItemCollection  coll
            (reduce (fn [^LegendItemCollection acc x]             
                      (doto acc (.add  (as-legend-item x))))
                    (LegendItemCollection.) items)
