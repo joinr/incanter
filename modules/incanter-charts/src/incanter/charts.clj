@@ -34,7 +34,7 @@
         [incanter.stats :refer [quantile quantile-normal cumulative-mean
                                sd correlation variance]]
         [clj-time.coerce :refer [to-date]]
-        [incanter.color :as color])
+        [cljcolor.core :as color])
   (:import  [java.io File]
             [javax.imageio ImageIO]
             [javax.swing JSlider JFrame JLabel JPanel]
